@@ -1,0 +1,5 @@
+vendor/
+subguess
+!subguess/
+.idea/
+go.sum

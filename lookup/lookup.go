@@ -12,34 +12,50 @@ import (
 )
 
 type Result struct {
-	IP string
-	Hostname string
+	IP   string
+	FQDN string
 }
 
-func Run(ctx context.Context, maxWorkers int, r io.Reader, domain string, addr string) ([]Result, error) {
+type Lookup struct {
+	domain string
+	addr string
+}
+
+func New(domain, addr string) *Lookup {
+	if domain == "" {
+		panic("domain cannot be empty")
+	}
+
+	return &Lookup{domain: domain, addr: addr}
+}
+
+func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]Result, []error) {
 	scanner := bufio.NewScanner(r)
 	var wg sync.WaitGroup
-	domains := make(chan string)
+	subdomains := make(chan string, 1000)
 	gather := make(chan []Result)
-	errs := make(chan error)
+	runErrors := make(chan error)
+	done := make(chan struct{})
 
+	var errorBag []error
 	var results []Result
 
 	for i := 0; i < maxWorkers; i++ {
 		wg.Add(1)
-		go Worker(&wg, domains, addr, gather, errs)
+		go Worker(&wg, l, subdomains, gather, runErrors)
 	}
 
 	go func() {
 		for scanner.Scan() {
-			domains <- fmt.Sprintf("%s.%s", scanner.Text(), domain)
+			subdomains <- scanner.Text()
 		}
 
-		close(domains)
+		close(subdomains)
 	}()
 
-	for {
-		select {
+	go func() {
+		for {
+			select {
 			case r := <-gather:
 				if r != nil && len(r) > 0 {
 					results = append(results, r...)
@@ -47,27 +63,41 @@ func Run(ctx context.Context, maxWorkers int, r io.Reader, domain string, addr s
 					log.Println("Gathered an empty result or null")
 				}
 			case <-ctx.Done():
-				log.Println("Context is done")
-				close(domains)
+				log.Println("Context is done. Closing channels")
+				close(subdomains)
 				close(gather)
-				return results, nil
-			case err := <-errs:
-				log.Println(err)
+				return
+			case <-done:
+				log.Println("All done. Closing channels")
+				close(gather)
+				return
+			case err := <-runErrors:
+				errorBag = append(errorBag, err)
+			}
 		}
-	}
+	}()
+
+	wg.Wait()
+	done <- struct{}{}
+
+	return results, errorBag
 }
 
-func A(domain, addr string) ([]string, error) {
+
+func (l *Lookup) fetchARecordsFor(fqdn string) ([]string, error) {
 	var msg dns.Msg
 	var ips []string
-	msg.SetQuestion(dns.Fqdn(domain), dns.TypeA)
-	resp, err := dns.Exchange(&msg, addr)
+	msg.SetQuestion(dns.Fqdn(fqdn), dns.TypeA)
+
+	log.Printf("\nChecking %s for A records", fqdn)
+
+	resp, err := dns.Exchange(&msg, l.addr)
 	if err != nil {
-		return ips, errors.Wrapf(err, "could not get A records for %s from %s", domain, addr)
+		return ips, errors.Wrapf(err, "could not get fetchARecordsFor records for %s from %s", fqdn, l.addr)
 	}
 
 	if len(resp.Answer) < 1 {
-		return ips, errors.Errorf("No answer for %s on address %s when looking for A records", domain, addr)
+		return ips, errors.Errorf("No answer for fqdn [%s] on address [%s] when looking for fetchARecordsFor records", fqdn, l.addr)
 	}
 
 	for i := range resp.Answer {
@@ -79,17 +109,20 @@ func A(domain, addr string) ([]string, error) {
 	return ips, nil
 }
 
-func CNAME(domain, addr string) ([]string, error) {
+func (l *Lookup) fetchCNAMERecordsFor(fqdn string) ([]string, error) {
 	var msg dns.Msg
 	var cnames []string
-	msg.SetQuestion(dns.Fqdn(domain), dns.TypeCNAME)
-	resp, err := dns.Exchange(&msg, addr)
+	msg.SetQuestion(dns.Fqdn(fqdn), dns.TypeCNAME)
+
+	log.Printf("\nChecking %s for CNAME records", fqdn)
+
+	resp, err := dns.Exchange(&msg, l.addr)
 	if err != nil {
-		return cnames, errors.Wrapf(err, "could not get CNAME records for domain %s from %s", domain, addr)
+		return cnames, errors.Wrapf(err, "could not get fetchCNAMERecordsFor records for fqdn [%s] from [%s]", fqdn, l.addr)
 	}
 
 	if len(resp.Answer) < 1 {
-		return cnames, errors.Errorf("No answer for domain %s on address %s when looking for CNAME records", domain, addr)
+		return cnames, errors.Errorf("No answer for fqdn [%s] on address %s when looking for fetchCNAMERecordsFor records", fqdn, l.addr)
 	}
 
 	for i := range resp.Answer {
@@ -101,40 +134,44 @@ func CNAME(domain, addr string) ([]string, error) {
 	return cnames, nil
 }
 
-func fetch(domain, addr string) ([]Result, error) {
+func (l *Lookup) CreateFQDN(subdomain string) string {
+	return fmt.Sprintf("%s.%s", subdomain, l.domain)
+}
+
+func (l *Lookup) fetchResultsFor(subdomain string) ([]Result, error) {
 	var results []Result
-	var hostname = domain
+	var fqdn = l.CreateFQDN(subdomain)
 
 	for {
-		cnames, err := CNAME(hostname, addr)
-		if err != nil {
-			log.Println(err)
-		} else if len(cnames) > 0 {
-			hostname = cnames[0]
+		cnames, err := l.fetchCNAMERecordsFor(fqdn)
+		if err == nil && len(cnames) > 0 {
+			fqdn = cnames[0]
 			continue
 		}
 
-		ips, err := A(domain, addr)
+		ips, err := l.fetchARecordsFor(fqdn)
 		if err != nil {
 			return results, err
 		}
 
 		for i := range ips {
-			results = append(results, Result{IP: ips[i], Hostname: hostname})
+			results = append(results, Result{IP: ips[i], FQDN: fqdn})
 		}
+
+		return results, nil
 	}
 }
 
-func Worker(wg *sync.WaitGroup, domains chan string, addr string, gather chan []Result, errs chan error) {
-	for domain := range domains {
-		result, err := fetch(domain, addr)
+func Worker(wg *sync.WaitGroup, l *Lookup, domains chan string, gather chan []Result, errs chan error) {
+	for subdomain := range domains {
+		results, err := l.fetchResultsFor(subdomain)
 		if err != nil {
 			errs <- err
 			continue
 		}
 
-		if len(result) > 0 {
-			gather <- result
+		if len(results) > 0 {
+			gather <- results
 		}
 	}
 

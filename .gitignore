@@ -3,3 +3,4 @@ subguess
 !subguess/
 .idea/
 go.sum
+subnames.txt

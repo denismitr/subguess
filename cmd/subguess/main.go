@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"github.com/denismitr/subguess/lookup"
 	"golang.org/x/net/context"
-	"text/tabwriter"
+	"log"
 	"os"
 	"time"
 )
 
 func main() {
 	var domain = flag.String("domain", "", "Domain to guess subdomains on")
-	var workers = flag.Int("workers", 10, "Number of workers to run")
+	var workers = flag.Int("workers", 100, "Number of workers to run")
+	var timeout = flag.Int("timeout", 5, "Max timeout")
 	var source = flag.String("source", "", "Source file to read suggestions from")
 	var addr = flag.String("server", "8.8.8.8:53", "DNS server address to use")
 
@@ -25,21 +26,27 @@ func main() {
 
 	f, err := os.Open(*source)
 	if err != nil {
-		panic(err)
+		log.Fatalf("No %s source file found", *source)
 	}
 
 	defer f.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 1 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeout) * time.Second)
 	defer cancel()
 
-	results, err := lookup.Run(ctx, *workers, f, *domain, *addr)
-	if err != nil {
-		panic(err)
-	}
+	l := lookup.New(*domain, *addr)
+	results, errorBag := l.Run(ctx, *workers, f)
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 8, 4, 0, 0)
+	if len(results) > 0 {
+		fmt.Printf("\nFound %d results\n", len(results))
 
-	for i := range results {
-		_, _ = fmt.Fprintf(w, "%s\t%s\n", results[i].Hostname, results[i].IP)
+		for i := range results {
+			fmt.Printf("\nFQDN:\t%s\tIP:\t%s\n", results[i].FQDN, results[i].IP)
+		}
+	} else {
+		fmt.Printf("\nNo results found for %s at %s", *domain, *addr)
+
+		for i := range errorBag {
+			log.Printf("\nError: %s", errorBag[i].Error())
+		}
 	}
 }

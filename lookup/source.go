@@ -15,6 +15,10 @@ const (
 	stopped
 )
 
+type Streamer interface {
+	Stream() <-chan string
+}
+
 type source struct {
 	scanner *bufio.Scanner
 
@@ -31,11 +35,11 @@ func newSource(r io.Reader) *source {
 	}
 }
 
-func (s *source) pipe() <-chan string {
+func (s *source) Stream() <-chan string {
 	return s.subdomains
 }
 
-func (s *source) Run() {
+func (s *source) Pipe() {
 	s.mu.Lock()
 	s.status = running
 	s.mu.Unlock()

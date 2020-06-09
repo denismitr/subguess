@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"sync"
-	"time"
 )
 
 type Result struct {
@@ -21,6 +20,28 @@ type Lookup struct {
 	addr string
 }
 
+type GatherFunc func()
+
+func (l *Lookup) gatherFunc (streamer Streamer, sink chan []Result, errs chan error) GatherFunc {
+	return func() {
+		for subdomain := range streamer.Stream() {
+			results, err := l.fetchResultsFor(subdomain)
+			if err != nil {
+				errs <- err
+				continue
+			}
+
+			if len(results) > 0 {
+				select {
+				case sink <- results:
+				default:
+					log.Println("Sink is closed")
+				}
+			}
+		}
+	}
+}
+
 func New(domain, addr string) *Lookup {
 	if domain == "" {
 		panic("domain cannot be empty")
@@ -30,9 +51,9 @@ func New(domain, addr string) *Lookup {
 }
 
 func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]Result, []error) {
-	s := newSource(r)
+	src := newSource(r)
 	var wg sync.WaitGroup
-	gather := make(chan []Result)
+	sink := make(chan []Result)
 	runErrors := make(chan error)
 	done := make(chan struct{})
 
@@ -40,15 +61,15 @@ func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]Result
 	var results []Result
 
 	for i := 0; i < maxWorkers; i++ {
-		go Worker(i + 1, &wg, ctx, l, s.pipe(), gather, runErrors)
+		go Worker(i + 1, &wg, ctx, l.gatherFunc(src, sink, runErrors))
 	}
 
-	go s.Run()
+	go src.Pipe()
 
 	go func() {
 		for {
 			select {
-			case r := <-gather:
+			case r := <-sink:
 				if r != nil && len(r) > 0 {
 					results = append(results, r...)
 				} else {
@@ -56,11 +77,12 @@ func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]Result
 				}
 			case <-ctx.Done():
 				log.Println("Context is done. Closing channels")
-				s.stop()
+				src.stop()
+				errorBag = append(errorBag, ctx.Err())
 				return
 			case <-done:
 				log.Println("All done. Closing channels")
-				s.stop()
+				src.stop()
 				return
 			case err := <-runErrors:
 				errorBag = append(errorBag, err)
@@ -108,7 +130,7 @@ func (l *Lookup) fetchCNAMERecordsFor(fqdn string) ([]string, error) {
 	msg.SetQuestion(dns.Fqdn(fqdn), dns.TypeCNAME)
 
 	log.Printf("\nChecking %s for CNAME records", fqdn)
-	time.Sleep(2 * time.Second)
+
 	resp, err := dns.Exchange(&msg, l.addr)
 	if err != nil {
 		return cnames, errors.Wrapf(err, "could not get fetchCNAMERecordsFor records for fqdn [%s] from [%s]", fqdn, l.addr)
@@ -155,28 +177,13 @@ func (l *Lookup) fetchResultsFor(subdomain string) ([]Result, error) {
 	}
 }
 
-func Worker(id int, wg *sync.WaitGroup, ctx context.Context, l *Lookup, subdomains <-chan string, gather chan []Result, errs chan error) {
+func Worker(id int, wg *sync.WaitGroup, ctx context.Context, gf GatherFunc) {
 	wg.Add(1)
 
 	done := make(chan struct{})
 
 	go func() {
-		for subdomain := range subdomains {
-			results, err := l.fetchResultsFor(subdomain)
-			if err != nil {
-				errs <- err
-				continue
-			}
-
-			if len(results) > 0 {
-				select {
-				case gather <- results:
-				default:
-					log.Println("Sink is closed")
-				}
-			}
-		}
-
+		gf()
 		close(done)
 	}()
 

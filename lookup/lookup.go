@@ -22,20 +22,18 @@ type Lookup struct {
 
 type GatherFunc func()
 
-func (l *Lookup) gatherFunc (streamer Streamer, sink chan []Result, errs chan error) GatherFunc {
+func (l *Lookup) gatherFunc (streamer Streamer, sink *sink) GatherFunc {
 	return func() {
 		for subdomain := range streamer.Stream() {
 			results, err := l.fetchResultsFor(subdomain)
 			if err != nil {
-				errs <- err
+				sink.error(err)
 				continue
 			}
 
 			if len(results) > 0 {
-				select {
-				case sink <- results:
-				default:
-					log.Println("Sink is closed")
+				if err := sink.results(results); err != nil {
+					log.Println(err)
 				}
 			}
 		}
@@ -51,17 +49,14 @@ func New(domain, addr string) *Lookup {
 }
 
 func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]Result, []error) {
-	src := newSource(r)
 	var wg sync.WaitGroup
-	sink := make(chan []Result)
-	runErrors := make(chan error)
+
+	src := newSource(r)
+	sink := newSink().run()
 	done := make(chan struct{})
 
-	var errorBag []error
-	var results []Result
-
 	for i := 0; i < maxWorkers; i++ {
-		go Worker(i + 1, &wg, ctx, l.gatherFunc(src, sink, runErrors))
+		go Worker(i + 1, &wg, ctx, l.gatherFunc(src, sink))
 	}
 
 	go src.Pipe()
@@ -69,23 +64,17 @@ func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]Result
 	go func() {
 		for {
 			select {
-			case r := <-sink:
-				if r != nil && len(r) > 0 {
-					results = append(results, r...)
-				} else {
-					log.Println("Gathered an empty result or null")
-				}
 			case <-ctx.Done():
 				log.Println("Context is done. Closing channels")
+				sink.error(ctx.Err())
 				src.stop()
-				errorBag = append(errorBag, ctx.Err())
+				sink.stop()
 				return
 			case <-done:
 				log.Println("All done. Closing channels")
 				src.stop()
+				sink.stop()
 				return
-			case err := <-runErrors:
-				errorBag = append(errorBag, err)
 			}
 		}
 	}()
@@ -95,7 +84,7 @@ func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]Result
 	close(done)
 
 	log.Println("RUN is done")
-	return results, errorBag
+	return sink.unwrap()
 }
 
 

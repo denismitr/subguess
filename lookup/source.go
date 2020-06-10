@@ -7,10 +7,10 @@ import (
 	"sync"
 )
 
-type sourceStatus int
+type status int
 
 const (
-	notStarted sourceStatus = iota
+	notStarted status = iota
 	running
 	stopped
 )
@@ -22,8 +22,8 @@ type Streamer interface {
 type source struct {
 	scanner *bufio.Scanner
 
-	mu sync.Mutex
-	status sourceStatus
+	mu         sync.Mutex
+	status     status
 	subdomains chan string
 }
 

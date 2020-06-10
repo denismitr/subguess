@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/denismitr/subguess/lookup"
+	"github.com/jedib0t/go-pretty/table"
 	"golang.org/x/net/context"
 	"log"
 	"os"
@@ -37,16 +38,36 @@ func main() {
 	results, errorBag := l.Run(ctx, *workers, f)
 
 	if len(results) > 0 {
-		fmt.Printf("\nFound %d results\n", len(results))
-
-		for i := range results {
-			fmt.Printf("\nFQDN:\t%s\tIP:\t%s\n", results[i].FQDN, results[i].IP)
-		}
+		drawResultsTable(results)
 	} else {
-		fmt.Printf("\nNo results found for %s at %s", *domain, *addr)
-
-		for i := range errorBag {
-			log.Printf("\nError: %s", errorBag[i].Error())
-		}
+		drawErrorsTable(errorBag)
 	}
+}
+
+func drawResultsTable(results []lookup.Result) {
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.AppendHeader(table.Row{"#", "FQDB", "IP address"})
+
+	for i := range results {
+		t.AppendRow(table.Row{fmt.Sprintf("%d", i), results[i].FQDN, results[i].IP})
+	}
+
+	t.AppendFooter(table.Row{"", "Total", len(results)})
+
+	t.Render()
+}
+
+func drawErrorsTable(errs []error) {
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.AppendHeader(table.Row{"#", "Error", "Level"})
+
+	for i := range errs {
+		t.AppendRow(table.Row{fmt.Sprintf("%d", i), errs[i].Error(), "UNKNOWN"}) // fixme
+	}
+
+	t.AppendFooter(table.Row{"", "Count", len(errs)})
+
+	t.Render()
 }

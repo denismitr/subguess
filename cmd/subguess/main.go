@@ -50,7 +50,7 @@ func drawResultsTable(results []lookup.Result) {
 	t.AppendHeader(table.Row{"#", "FQDB", "IP address"})
 
 	for i := range results {
-		t.AppendRow(table.Row{fmt.Sprintf("%d", i), results[i].FQDN, results[i].IP})
+		t.AppendRow(table.Row{fmt.Sprintf("%d", i + 1), results[i].FQDN, results[i].IP})
 	}
 
 	t.AppendFooter(table.Row{"", "Total", len(results)})
@@ -64,7 +64,7 @@ func drawErrorsTable(errs []error) {
 	t.AppendHeader(table.Row{"#", "Error", "Level"})
 
 	for i := range errs {
-		t.AppendRow(table.Row{fmt.Sprintf("%d", i), errs[i].Error(), "UNKNOWN"}) // fixme
+		t.AppendRow(table.Row{fmt.Sprintf("%d", i + 1), errs[i].Error(), "UNKNOWN"}) // fixme
 	}
 
 	t.AppendFooter(table.Row{"", "Count", len(errs)})

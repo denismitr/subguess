@@ -20,7 +20,7 @@ func newSink() *sink {
 	}
 }
 
-func (s *sink) run() *sink {
+func (s *sink) start() *sink {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.status = running

@@ -22,7 +22,7 @@ type Lookup struct {
 
 type GatherFunc func()
 
-func (l *Lookup) gatherFunc (streamer Streamer, sink *sink) GatherFunc {
+func (l *Lookup) gatherFunc(streamer Streamer, sink *sink) GatherFunc {
 	return func() {
 		for subdomain := range streamer.Stream() {
 			results, err := l.fetchResultsFor(subdomain)
@@ -52,14 +52,14 @@ func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]Result
 	var wg sync.WaitGroup
 
 	src := newSource(r)
-	sink := newSink().run()
+	sink := newSink().start()
 	done := make(chan struct{})
 
 	for i := 0; i < maxWorkers; i++ {
 		go Worker(i + 1, &wg, ctx, l.gatherFunc(src, sink))
 	}
 
-	go src.Pipe()
+	go src.start()
 
 	go func() {
 		for {

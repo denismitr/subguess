@@ -39,7 +39,7 @@ func (s *source) Stream() <-chan string {
 	return s.subdomains
 }
 
-func (s *source) Pipe() {
+func (s *source) start() {
 	s.mu.Lock()
 	s.status = running
 	s.mu.Unlock()

@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/denismitr/subguess/lookup"
-	"github.com/jedib0t/go-pretty/table"
+	"github.com/jedib0t/go-pretty/v6/table"
 	"golang.org/x/net/context"
 	"log"
 	"os"
@@ -44,16 +44,35 @@ func main() {
 	}
 }
 
-func drawResultsTable(results []lookup.Result) {
+func drawResultsTable(results []*lookup.Result) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"#", "FQDB", "IP address"})
+	t.AppendHeader(table.Row{"#", "FQDB", "##", "IP address"})
 
+	var totalIPs = make(map[string]bool)
 	for i := range results {
-		t.AppendRow(table.Row{fmt.Sprintf("%d", i + 1), results[i].FQDN, results[i].IP})
+		for j := range results[i].IPs {
+			totalIPs[results[i].IPs[j]] = true
+			if j == 0 {
+				t.AppendSeparator()
+				t.AppendRow(table.Row{
+					fmt.Sprintf("%d", i + 1),
+					results[i].FQDN,
+					fmt.Sprintf("%d", j + 1),
+					results[i].IPs[j],
+				})
+			} else {
+				t.AppendRow(table.Row{
+					"",
+					"",
+					fmt.Sprintf("%d", j + 1),
+					results[i].IPs[j],
+				})
+			}
+		}
 	}
 
-	t.AppendFooter(table.Row{"", "Total", len(results)})
+	t.AppendFooter(table.Row{"Total domain names", len(results), "Total IPs", len(totalIPs)})
 
 	t.Render()
 }

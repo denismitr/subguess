@@ -1,65 +1,60 @@
 package lookup
 
 import (
-	"github.com/pkg/errors"
-	"sync"
+	"log"
 )
 
+type Result struct {
+	IPs  []string
+	FQDN string
+}
+
 type sink struct {
-	mu     sync.Mutex
-	rs     []Result
-	errs   []error
-	status status
+	inCh    chan *Result
+	errCh   chan error
+	stopCh  chan struct{}
+	results []*Result
+	errors  []error
 }
 
 func newSink() *sink {
 	return &sink{
-		rs:     make([]Result, 0, 5),
-		errs:   make([]error, 0),
-		status: notStarted,
+		errCh:   make(chan error),
+		inCh:    make(chan *Result),
+		stopCh:  make(chan struct{}),
+		results: make([]*Result, 0, 10),
+		errors:  make([]error, 0),
 	}
 }
 
-func (s *sink) start() *sink {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.status = running
-	return s
+func (s *sink) start() {
+	go func() {
+		for {
+			select {
+			case r := <-s.inCh:
+				s.results = append(s.results, r)
+			case err := <-s.errCh:
+				s.errors = append(s.errors, err)
+			case <-s.stopCh:
+				log.Println("Sink is stopping")
+				return
+			}
+		}
+	}()
 }
 
 func (s *sink) stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.status = stopped
+	close(s.stopCh)
 }
 
-func (s *sink) results(r []Result) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.status == stopped || s.status == notStarted {
-		return errors.Errorf("Sink is not in running state")
-	}
-
-	for i := range r {
-		s.rs = append(s.rs, r[i])
-	}
-
-	return nil
+func (s *sink) consumeResult() chan<- *Result {
+	return s.inCh
 }
 
-func (s *sink) error(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.status == stopped || s.status == notStarted {
-		return
-	}
-
-	s.errs = append(s.errs, err)
+func (s *sink) consumeError() chan<- error {
+	return s.errCh
 }
 
-func (s *sink) unwrap() ([]Result, []error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.rs, s.errs
+func (s *sink) unwrap() ([]*Result, []error) {
+	return s.results, s.errors
 }
-

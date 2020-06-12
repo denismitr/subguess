@@ -10,11 +10,6 @@ import (
 	"sync"
 )
 
-type Result struct {
-	IP   string
-	FQDN string
-}
-
 type Lookup struct {
 	domain string
 	addr string
@@ -25,17 +20,13 @@ type GatherFunc func()
 func (l *Lookup) gatherFunc(streamer Streamer, sink *sink) GatherFunc {
 	return func() {
 		for subdomain := range streamer.Stream() {
-			results, err := l.fetchResultsFor(subdomain)
+			result, err := l.fetchResultFor(subdomain)
 			if err != nil {
-				sink.error(err)
+				sink.consumeError() <-err
 				continue
 			}
 
-			if len(results) > 0 {
-				if err := sink.results(results); err != nil {
-					log.Println(err)
-				}
-			}
+			sink.consumeResult() <- result
 		}
 	}
 }
@@ -48,12 +39,14 @@ func New(domain, addr string) *Lookup {
 	return &Lookup{domain: domain, addr: addr}
 }
 
-func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]Result, []error) {
+func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]*Result, []error) {
 	var wg sync.WaitGroup
 
 	src := newSource(r)
-	sink := newSink().start()
+	sink := newSink()
 	done := make(chan struct{})
+
+	sink.start()
 
 	for i := 0; i < maxWorkers; i++ {
 		go Worker(i + 1, &wg, ctx, l.gatherFunc(src, sink))
@@ -66,14 +59,12 @@ func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]Result
 			select {
 			case <-ctx.Done():
 				log.Println("Context is done. Closing channels")
-				sink.error(ctx.Err())
+				sink.consumeError() <- ctx.Err()
 				src.stop()
-				sink.stop()
 				return
 			case <-done:
 				log.Println("All done. Closing channels")
 				src.stop()
-				sink.stop()
 				return
 			}
 		}
@@ -82,6 +73,7 @@ func (l *Lookup) Run(ctx context.Context, maxWorkers int, r io.Reader) ([]Result
 	wg.Wait()
 
 	close(done)
+	sink.stop()
 
 	log.Println("RUN is done")
 	return sink.unwrap()
@@ -142,8 +134,7 @@ func (l *Lookup) CreateFQDN(subdomain string) string {
 	return fmt.Sprintf("%s.%s", subdomain, l.domain)
 }
 
-func (l *Lookup) fetchResultsFor(subdomain string) ([]Result, error) {
-	var results []Result
+func (l *Lookup) fetchResultFor(subdomain string) (*Result, error) {
 	var fqdn = l.CreateFQDN(subdomain)
 
 	for {
@@ -155,14 +146,10 @@ func (l *Lookup) fetchResultsFor(subdomain string) ([]Result, error) {
 
 		ips, err := l.fetchARecordsFor(fqdn)
 		if err != nil {
-			return results, err
+			return nil, err
 		}
 
-		for i := range ips {
-			results = append(results, Result{IP: ips[i], FQDN: fqdn})
-		}
-
-		return results, nil
+		return &Result{FQDN: fqdn, IPs: ips}, nil
 	}
 }
 
